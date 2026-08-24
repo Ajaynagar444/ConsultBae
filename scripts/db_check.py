@@ -170,9 +170,61 @@ def main() -> int:
         ).fetchone()[0]
         check("check constraints created", n_ck >= 30, f"{n_ck} CHECK constraints")
 
-        # ---- the schema must be empty of data at this stage ----------------
-        rows = conn.execute("SELECT count(*) FROM raw_record").fetchone()[0]
-        check("no data loaded yet (schema only)", rows == 0, f"raw_record has {rows} rows")
+        # ---- raw layer integrity -------------------------------------------
+        # Not "is it empty" - it is legitimately full once ingestion has run.
+        # What matters is that whatever is in there is internally consistent.
+        rows, runs = conn.execute(
+            "SELECT count(*), count(DISTINCT run_id) FROM raw_record"
+        ).fetchone()
+
+        if rows == 0:
+            print(f"{INFO}raw_record is empty - run: python -m src.pipeline.ingest")
+        else:
+            print(f"{INFO}raw_record holds {rows} rows across {runs} ingestion run(s)")
+
+            bad_hash = conn.execute(
+                """SELECT count(*) FROM raw_record
+                    WHERE row_sha256 IS NULL OR row_sha256 !~ '^[0-9a-f]{64}$'"""
+            ).fetchone()[0]
+            check("every raw row has a well-formed hash", bad_hash == 0,
+                  f"{bad_hash} bad" if bad_hash else "")
+
+            bad_payload = conn.execute(
+                "SELECT count(*) FROM raw_record WHERE jsonb_typeof(payload) <> 'object'"
+            ).fetchone()[0]
+            check("every payload is a JSON object", bad_payload == 0,
+                  f"{bad_payload} bad" if bad_payload else "")
+
+            # Each completed run should hold the full 105 rows: 42 + 32 + 31.
+            # A short run means ingestion stopped early and went unnoticed.
+            short = conn.execute(
+                """SELECT count(*) FROM (
+                       SELECT r.run_id FROM raw_record r
+                       JOIN ingestion_run ir ON ir.id = r.run_id
+                       WHERE ir.status = 'succeeded'
+                       GROUP BY r.run_id HAVING count(*) <> 105
+                   ) t"""
+            ).fetchone()[0]
+            check("every succeeded run holds all 105 source rows", short == 0,
+                  f"{short} run(s) incomplete" if short else "")
+
+            # Line numbers must be gapless per source: 2..43, 2..33, 2..32.
+            gaps = conn.execute(
+                """SELECT count(*) FROM (
+                       SELECT run_id, source_system FROM raw_record
+                       GROUP BY run_id, source_system
+                       HAVING max(source_line_no) - min(source_line_no) + 1 <> count(*)
+                   ) t"""
+            ).fetchone()[0]
+            check("line numbers are gapless in every source", gaps == 0,
+                  f"{gaps} with gaps" if gaps else "")
+
+            orphans = conn.execute(
+                """SELECT count(*) FROM ingestion_run
+                    WHERE status = 'running' AND started_at < now() - interval '1 hour'"""
+            ).fetchone()[0]
+            check("no ingestion run left hanging", orphans == 0,
+                  f"{orphans} stuck in 'running'" if orphans else "")
 
         # ---- pg_trgm should NOT be installed -------------------------------
         trgm = conn.execute(
