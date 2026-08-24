@@ -3,8 +3,9 @@
 Merging three messy product databases into one clean record set, then
 automating on top of it.
 
-> **Status:** project scaffolding + data profiling complete.
-> Tasks 1–5 are not implemented yet. See [Roadmap](#roadmap).
+> **Status:** database foundation and raw CSV ingestion working.
+> 105 source rows load into `raw_record`. Normalisation, matching and the golden
+> layer are next. See [Roadmap](#roadmap).
 
 ---
 
@@ -31,7 +32,7 @@ evidence base is in **[docs/data-profile.md](docs/data-profile.md)**.
 
 | Task | Description | Status |
 |---|---|---|
-| **1 — Merge** | One clean database + a pipeline ingesting all 3 CSVs. Same person across files becomes ONE record. | Not started |
+| **1 — Merge** | One clean database + a pipeline ingesting all 3 CSVs. Same person across files becomes ONE record. | Raw ingestion done (105 rows); matching next |
 | **2 — Automate** | ONE working automation in **n8n**, connected to the database. Flow JSON committed to `automation/`. Pure-code solutions score zero. | Not started |
 | **3 — Audio app** | Web page: name + phone, record or upload audio, submit. Auto-extract duration, sample rate (kHz), bitrate and loudness (dB). Second view lists submissions with a play button. | Not started |
 | **4 — Data issues** | Every data-quality problem found and what was done about it. | Profiled — see `docs/data-profile.md` |
@@ -154,12 +155,14 @@ in `docs/data-profile.md`.
 `postgresql-x64-18`), Python 3.11+, and `ffmpeg`/`ffprobe` on PATH (Task 3 only).
 
 ```powershell
-# 1. Create the project role and databases. Prompts for the postgres password.
-#    Edit the password inside init_db.sql first.
-& 'C:\Program Files\PostgreSQL\18\bin\psql.exe' -U postgres -f scripts/init_db.sql
+# 1. Create the project role and databases. The app password is passed in as a
+#    psql variable, so no credential is ever stored in the repo.
+$env:PGPASSWORD = '<postgres superuser password>'
+& 'C:\Program Files\PostgreSQL\18\bin\psql.exe' -U postgres `
+    -v app_password="'<choose an app password>'" -f scripts/init_db.sql
 
 # 2. Configuration
-Copy-Item .env.example .env     # set POSTGRES_PASSWORD to match init_db.sql
+Copy-Item .env.example .env     # set POSTGRES_PASSWORD to the app password above
 
 # 3. Python environment
 python -m venv .venv
@@ -184,7 +187,11 @@ python scripts/db_check.py
 ```powershell
 python scripts/migrate.py --status   # what is applied, changes nothing
 python scripts/migrate.py --reset    # drop and rebuild the schema
-python -m src.pipeline.run --reset   # Task 1 - not implemented yet
+
+python -m src.pipeline.ingest             # load the 3 CSVs into raw_record
+python -m src.pipeline.ingest --dry-run   # parse and report, write nothing
+python -m src.pipeline.ingest --run-id 2  # re-ingest into an existing run
+python -m src.pipeline.ingest --log-format json
 pytest                               # test suite (47 tests)
 python -m src.audioapp.app           # Task 3 - not implemented yet
 ```
@@ -219,8 +226,9 @@ or cloud.
 - [x] Profile all three sources; document schemas, issues and matching strategy
 - [x] Project scaffolding, database setup scripts, dependency pinning
 - [x] Database foundation — 5 migrations, 13 tables, 3 views, 52 CHECK
-      constraints, 47 passing tests
-- [ ] Task 1 — ingest, normalise, match, golden records
+      constraints
+- [x] Task 1a — raw CSV ingestion: 105 rows, append-only, idempotent per run
+- [ ] Task 1b — normalise, match, golden records
 - [ ] Task 2 — n8n workflow against the merged database
 - [ ] Task 3 — audio collection app with metadata extraction
 - [ ] Task 4 — data issues report generated from `data_issue`
