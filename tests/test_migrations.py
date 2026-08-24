@@ -42,6 +42,7 @@ def test_expected_migrations_are_present():
         "003_staging.sql",
         "004_golden.sql",
         "005_audio.sql",
+        "006_match_methods.sql",
     }
 
 
@@ -107,8 +108,8 @@ def test_reset_rebuilds_from_scratch(migrated_db):
 
     result = run_migrate(migrated_db, "--reset")
     assert result.returncode == 0, result.stderr
-    assert result.stdout.count("+ ") == 5
+    assert result.stdout.count("+ ") == 6
 
     with psycopg.connect(migrated_db) as c:
         n = c.execute("SELECT count(*) FROM schema_migration").fetchone()[0]
-    assert n == 5
+    assert n == 6

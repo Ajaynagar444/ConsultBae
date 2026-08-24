@@ -266,14 +266,14 @@ def test_a_source_row_maps_to_exactly_one_person(conn, person_id, raw_id):
            VALUES ('Other', 'other', 'other@example.com') RETURNING id"""
     ).fetchone()[0]
     conn.execute("""INSERT INTO person_source_link (person_id, raw_record_id, method)
-                    VALUES (%s, %s, 'email_exact')""", (person_id, raw_id))
+                    VALUES (%s, %s, 'exact_email')""", (person_id, raw_id))
     rejects(conn, """INSERT INTO person_source_link (person_id, raw_record_id, method)
-                     VALUES (%s, %s, 'phone_exact')""", (other, raw_id))
+                     VALUES (%s, %s, 'exact_phone')""", (other, raw_id))
 
 
 def test_match_confidence_is_bounded(conn, person_id, raw_id):
     rejects(conn, """INSERT INTO person_source_link (person_id, raw_record_id, method, confidence)
-                     VALUES (%s, %s, 'name_guarded', 1.5)""", (person_id, raw_id))
+                     VALUES (%s, %s, 'guarded_name', 1.5)""", (person_id, raw_id))
 
 
 def test_data_issue_requires_an_action(conn, run_id):
