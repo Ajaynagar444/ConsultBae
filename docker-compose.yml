@@ -1,0 +1,45 @@
+# OPTIONAL — portable path for anyone cloning this repo without a local
+# PostgreSQL server. Development on this machine runs against a natively
+# installed PostgreSQL 18 on port 5432 instead; see README "Setup".
+#
+# The image is pinned to 18 to match that native server. Dev/CI version skew is
+# a real source of "works on my machine", and the assignment leaves the
+# PostgreSQL version to us.
+#
+# This service publishes 5433, NOT 5432, so it can run side by side with a
+# native server without a port clash. Set POSTGRES_PORT=5433 in .env when using it.
+#
+#   cp .env.example .env            # set POSTGRES_PASSWORD, POSTGRES_PORT=5433
+#   docker compose up -d
+#   docker compose ps               # wait for "healthy"
+#
+# n8n joins this file in Task 2 so the automation can reach the database over
+# the compose network instead of a tunnel.
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: consultbae-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-consultbae}
+      POSTGRES_USER: ${POSTGRES_USER:-consultbae}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required - copy .env.example to .env}
+    ports:
+      # Default 5433 to stay clear of a native server on 5432.
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      # Named volume, not a bind mount: keeps database files out of the repo.
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # Task 2 will gate n8n on this, so its Postgres node never starts against
+      # a database that is still initialising.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-consultbae} -d ${POSTGRES_DB:-consultbae}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  pgdata:
+    name: consultbae-pgdata

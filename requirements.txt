@@ -1,0 +1,22 @@
+# Task 1 pipeline + test suite. Deliberately minimal: with ~100 source rows,
+# the standard library (csv, re, datetime, dataclasses) does the parsing and
+# normalisation, and the schema is bespoke enough that an ORM would add a layer
+# to defend for no benefit. Raw SQL over psycopg instead.
+
+# PostgreSQL driver. [binary] ships prebuilt wheels so no local libpq/compiler
+# is required on Windows.
+psycopg[binary]~=3.2
+
+# Loads .env into the process environment for local runs.
+python-dotenv~=1.0
+
+# Test runner (assignment rule: every major implementation ships with tests).
+pytest~=8.3
+
+# ---------------------------------------------------------------------------
+# Added in Task 3 (audio app), not installed yet:
+#   Flask~=3.1          - web server for the submit + list views
+#   pytest-mock~=3.14   - only if ffprobe needs stubbing in tests
+# Audio metadata (duration / sample rate / bitrate / loudness) is read by
+# shelling out to ffprobe + ffmpeg, which are system binaries, not pip packages.
+# ---------------------------------------------------------------------------

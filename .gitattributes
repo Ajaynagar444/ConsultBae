@@ -1,0 +1,23 @@
+# Default: let Git normalise line endings for text it manages.
+* text=auto
+
+# ---------------------------------------------------------------------------
+# Raw source data is the project's evidence layer. Its SHA-256 hashes are
+# recorded in docs/data-profile.md and asserted by the test suite, so Git must
+# NOT touch it. Without -text, core.autocrlf=true stores these CRLF files as LF
+# in the index; a clone on Linux or macOS then produces different bytes and
+# different hashes, and the "raw layer is byte-for-byte the source" claim
+# quietly stops being true.
+# ---------------------------------------------------------------------------
+data/raw/*.csv -text
+
+# Binary assets: never diff, never touch.
+*.pdf   binary
+*.wav   binary
+*.mp3   binary
+*.m4a   binary
+*.ogg   binary
+*.webm  binary
+
+# Keep shell scripts LF so they run inside containers.
+*.sh text eol=lf
