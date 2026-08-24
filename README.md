@@ -33,7 +33,7 @@ evidence base is in **[docs/data-profile.md](docs/data-profile.md)**.
 | Task | Description | Status |
 |---|---|---|
 | **1 — Merge** | One clean database + a pipeline ingesting all 3 CSVs. Same person across files becomes ONE record. | Raw ingestion done (105 rows); matching next |
-| **2 — Automate** | ONE working automation in **n8n**, connected to the database. Flow JSON committed to `automation/`. Pure-code solutions score zero. | Not started |
+| **2 — Automate** | ONE working automation in **n8n**, connected to the database. Flow JSON committed to `automation/`. Pure-code solutions score zero. | **Done** — duplicate-detection webhook, tested live |
 | **3 — Audio app** | Web page: name + phone, record or upload audio, submit. Auto-extract duration, sample rate (kHz), bitrate and loudness (dB). Second view lists submissions with a play button. | Not started |
 | **4 — Data issues** | Every data-quality problem found and what was done about it. | Profiled — see `docs/data-profile.md` |
 | **5 — Stretch** | One page, no code: launching the audio app to 5,000 workers in a weekend. What breaks first? | Not started |
@@ -126,7 +126,10 @@ consultbae-assignment/
 ├── src/
 │   ├── pipeline/               Task 1: ingest, repair, normalize, match, load
 │   └── audioapp/               Task 3: Flask app + ffprobe metadata extraction
-├── automation/                 Task 2: exported n8n workflow JSON
+├── automation/
+│   ├── workflow.json           Task 2: the n8n workflow (genuine n8n export)
+│   ├── README.md               import, credentials, triggers, test results
+│   └── samples/                4 demo CSVs incl. known duplicates
 ├── tests/
 │   ├── conftest.py             rebuilds the schema in consultbae_test
 │   ├── test_migrations.py      runner idempotency, numbering, PG16 syntax
@@ -229,7 +232,9 @@ or cloud.
       constraints
 - [x] Task 1a — raw CSV ingestion: 105 rows, append-only, idempotent per run
 - [ ] Task 1b — normalise, match, golden records
-- [ ] Task 2 — n8n workflow against the merged database
+- [x] Task 2 — n8n duplicate-detection workflow (n8n 2.35.7, npm-local, no
+      Docker): webhook → normalise → Postgres lookup → duplicate/new branches.
+      Tested live against all four sample CSVs — see `automation/README.md`
 - [ ] Task 3 — audio collection app with metadata extraction
 - [ ] Task 4 — data issues report generated from `data_issue`
 - [ ] Task 5 — scale write-up

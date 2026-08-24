@@ -1,0 +1,312 @@
+[
+  {
+    "updatedAt": "2026-08-24T12:09:52.000Z",
+    "createdAt": "2026-08-24T12:01:51.923Z",
+    "id": "ConsultBaeDup001",
+    "name": "ConsultBae - Duplicate Detection",
+    "description": null,
+    "active": true,
+    "isArchived": false,
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "consultbae-duplicate-check",
+          "responseMode": "responseNode",
+          "options": {}
+        },
+        "id": "aa000001-0000-4000-8000-000000000001",
+        "name": "Receive CSV",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          -560,
+          0
+        ],
+        "webhookId": "consultbae-duplicate-check",
+        "notes": "POST a CSV with header name,email,phone.\nAccepts JSON {\"csv\": \"...\"} or form field csv=..."
+      },
+      {
+        "parameters": {
+          "mode": "runOnceForAllItems",
+          "jsCode": "// Parse the incoming CSV and normalise identifiers with the SAME rules\n// as the Task 1 pipeline (src/pipeline/normalize.py):\n//   email: trim + lowercase, must look like an address\n//   phone: strip non-digits, peel 091/91/0 prefixes, must be 10 digits\n//          starting 6-9, stored as +91 E.164\n// Invalid values become null rather than guesses - identical policy to\n// the pipeline: an identifier we cannot trust must not be used to match.\n\nconst body = $input.first().json.body ?? $input.first().json;\nlet csv = null;\nif (typeof body === 'string') csv = body;\nelse if (body && typeof body.csv === 'string') csv = body.csv;\nif (!csv || !csv.trim()) {\n  throw new Error('No CSV found. POST JSON {\"csv\": \"name,email,phone\\\\n...\"} or a form field named csv.');\n}\n\n// Minimal RFC-4180 parser: quoted fields, escaped quotes, CRLF or LF.\nfunction parseCsv(text) {\n  const rows = [];\n  let row = [], field = '', inQuotes = false;\n  for (let i = 0; i < text.length; i++) {\n    const c = text[i];\n    if (inQuotes) {\n      if (c === '\"') {\n        if (text[i + 1] === '\"') { field += '\"'; i++; } else { inQuotes = false; }\n      } else { field += c; }\n    } else if (c === '\"') { inQuotes = true; }\n    else if (c === ',') { row.push(field); field = ''; }\n    else if (c === '\\n') {\n      row.push(field.replace(/\\r$/, '')); field = '';\n      rows.push(row); row = [];\n    } else { field += c; }\n  }\n  if (field !== '' || row.length) { row.push(field.replace(/\\r$/, '')); rows.push(row); }\n  return rows.filter(r => r.some(v => v.trim() !== ''));\n}\n\nconst EMAIL_RE = /^[^@\\s,]+@[^@\\s,]+\\.[^@\\s,]+$/;\nfunction normEmail(raw) {\n  if (!raw || !String(raw).trim()) return null;\n  const v = String(raw).trim().toLowerCase();\n  return EMAIL_RE.test(v) ? v : null;\n}\nfunction normPhone(raw) {\n  if (!raw || !String(raw).trim()) return null;\n  let d = String(raw).replace(/\\D/g, '');\n  if (d.length === 13 && d.startsWith('091')) d = d.slice(3);\n  else if (d.length === 12 && d.startsWith('91')) d = d.slice(2);\n  else if (d.length === 11 && d.startsWith('0')) d = d.slice(1);\n  return /^[6-9]\\d{9}$/.test(d) ? '+91' + d : null;\n}\n\nconst rows = parseCsv(csv);\nif (!rows.length) throw new Error('CSV is empty.');\n\nconst header = rows[0].map(h => h.trim().toLowerCase());\nconst nameIdx = header.indexOf('name');\nconst emailIdx = header.indexOf('email');\nconst phoneIdx = header.indexOf('phone');\nif (nameIdx === -1 && emailIdx === -1 && phoneIdx === -1) {\n  throw new Error('Header must contain at least one of: name, email, phone. Got: ' + header.join(','));\n}\n\nreturn rows.slice(1).map((r, i) => {\n  const emailRaw = emailIdx >= 0 ? (r[emailIdx] ?? '') : '';\n  const phoneRaw = phoneIdx >= 0 ? (r[phoneIdx] ?? '') : '';\n  return { json: {\n    row_number: i + 1,\n    // commas stripped: n8n query-replacement splits parameters on commas\n    name: nameIdx >= 0 ? (r[nameIdx] ?? '').trim().replace(/,/g, ' ') : '',\n    email_raw: emailRaw,\n    phone_raw: phoneRaw,\n    email_norm: normEmail(emailRaw),\n    phone_e164: normPhone(phoneRaw),\n  }};\n});"
+        },
+        "id": "aa000002-0000-4000-8000-000000000002",
+        "name": "Parse CSV + Normalise",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          -320,
+          0
+        ],
+        "notes": "Same normalisation rules as Task 1's normalize.py. Invalid identifiers become null, never guesses."
+      },
+      {
+        "parameters": {
+          "operation": "executeQuery",
+          "query": "WITH incoming AS (\n  SELECT NULLIF($1, '-') AS email, NULLIF($2, '-') AS phone,\n         NULLIF($3, '-') AS name, $4 AS row_number\n),\ncandidates AS (\n  SELECT pe.person_id, 'exact_email' AS method, 1.00 AS confidence,\n         'incoming email equals stored email ' || pe.email AS evidence,\n         0 AS priority\n    FROM person_email pe JOIN incoming i ON pe.email = i.email\n  UNION ALL\n  SELECT pp.person_id, 'exact_phone', 1.00,\n         'incoming phone equals stored phone ' || pp.phone_e164,\n         1\n    FROM person_phone pp JOIN incoming i ON pp.phone_e164 = i.phone\n)\nSELECT i.row_number::int          AS row_number,\n       i.name                     AS incoming_name,\n       i.email                    AS incoming_email,\n       i.phone                    AS incoming_phone,\n       best.person_id,\n       p.full_name                AS matched_name,\n       p.city                     AS matched_city,\n       best.method,\n       best.confidence,\n       best.evidence,\n       (SELECT count(DISTINCT person_id) FROM candidates) AS candidate_people\nFROM incoming i\nLEFT JOIN LATERAL (\n  SELECT * FROM candidates ORDER BY priority LIMIT 1\n) best ON true\nLEFT JOIN person p ON p.id = best.person_id",
+          "options": {
+            "queryReplacement": "={{ $json.email_norm || '-' }},{{ $json.phone_e164 || '-' }},{{ $json.name || '-' }},{{ $json.row_number }}"
+          }
+        },
+        "id": "aa000003-0000-4000-8000-000000000003",
+        "name": "Find Existing Person",
+        "type": "n8n-nodes-base.postgres",
+        "typeVersion": 2.6,
+        "position": [
+          -80,
+          0
+        ],
+        "credentials": {
+          "postgres": {
+            "id": "consultbae-postgres",
+            "name": "ConsultBae Postgres"
+          }
+        },
+        "notes": "Read-only lookup. Priority: exact email, then exact phone - the same deterministic order as Task 1 matching. Parameterised ($1..$4), so no SQL injection. Always returns exactly one row per incoming row via LEFT JOIN LATERAL. Absent values travel as the sentinel '-' because n8n's query-replacement drops empty parameters, which would shift $4 away."
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "loose",
+              "version": 2
+            },
+            "conditions": [
+              {
+                "id": "cond-person-exists",
+                "leftValue": "={{ $json.person_id }}",
+                "rightValue": "",
+                "operator": {
+                  "type": "number",
+                  "operation": "exists",
+                  "singleValue": true
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "aa000004-0000-4000-8000-000000000004",
+        "name": "Duplicate?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.2,
+        "position": [
+          160,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "mode": "runOnceForEachItem",
+          "jsCode": "const j = $json;\nconst out = {\n  status: 'DUPLICATE',\n  row: j.row_number,\n  incoming: { name: j.incoming_name, email: j.incoming_email, phone: j.incoming_phone },\n  matched_person: { id: j.person_id, name: j.matched_name, city: j.matched_city },\n  match: { method: j.method, confidence: Number(j.confidence), evidence: j.evidence },\n  action: 'not inserted - flagged for review',\n};\nif (Number(j.candidate_people) > 1) {\n  out.warning = 'email and phone point at DIFFERENT existing people - needs human review';\n}\nreturn { json: out };"
+        },
+        "id": "aa000005-0000-4000-8000-000000000005",
+        "name": "Format Duplicate Alert",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          400,
+          -140
+        ],
+        "notes": "The alert: who came in, who they already are, and the exact evidence."
+      },
+      {
+        "parameters": {
+          "mode": "runOnceForEachItem",
+          "jsCode": "const j = $json;\nconst hadIdentifier = !!(j.incoming_email || j.incoming_phone);\nreturn { json: {\n  status: hadIdentifier ? 'NEW' : 'UNCHECKABLE',\n  row: j.row_number,\n  incoming: { name: j.incoming_name, email: j.incoming_email, phone: j.incoming_phone },\n  message: hadIdentifier\n    ? 'no existing person matched either identifier'\n    : 'row carried no valid email or phone - identity cannot be checked',\n  action: hadIdentifier\n    ? 'safe to continue as a new record (this workflow does not create one)'\n    : 'rejected for identity purposes - fix the identifiers and resubmit',\n}};"
+        },
+        "id": "aa000006-0000-4000-8000-000000000006",
+        "name": "Format New Record",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          400,
+          140
+        ],
+        "notes": "No canonical person is created here: duplicate DETECTION only. Creation belongs to the audited Task 1 pipeline."
+      },
+      {
+        "parameters": {
+          "mode": "append",
+          "options": {}
+        },
+        "id": "aa000007-0000-4000-8000-000000000007",
+        "name": "Collect Both Branches",
+        "type": "n8n-nodes-base.merge",
+        "typeVersion": 3.2,
+        "position": [
+          640,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "mode": "runOnceForAllItems",
+          "jsCode": "const results = $input.all().map(i => i.json)\n  .sort((a, b) => (a.row || 0) - (b.row || 0));\nconst duplicates = results.filter(r => r.status === 'DUPLICATE').length;\nconst fresh = results.filter(r => r.status === 'NEW').length;\nconst uncheckable = results.filter(r => r.status === 'UNCHECKABLE').length;\nreturn [{ json: {\n  summary: {\n    rows_checked: results.length,\n    duplicates,\n    new_records: fresh,\n    uncheckable,\n  },\n  results,\n}}];"
+        },
+        "id": "aa000008-0000-4000-8000-000000000008",
+        "name": "Summarise",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          880,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "respondWith": "firstIncomingItem",
+          "options": {}
+        },
+        "id": "aa000009-0000-4000-8000-000000000009",
+        "name": "Respond With Report",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1.4,
+        "position": [
+          1120,
+          0
+        ]
+      }
+    ],
+    "connections": {
+      "Receive CSV": {
+        "main": [
+          [
+            {
+              "node": "Parse CSV + Normalise",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Parse CSV + Normalise": {
+        "main": [
+          [
+            {
+              "node": "Find Existing Person",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Find Existing Person": {
+        "main": [
+          [
+            {
+              "node": "Duplicate?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Duplicate?": {
+        "main": [
+          [
+            {
+              "node": "Format Duplicate Alert",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Format New Record",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Format Duplicate Alert": {
+        "main": [
+          [
+            {
+              "node": "Collect Both Branches",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Format New Record": {
+        "main": [
+          [
+            {
+              "node": "Collect Both Branches",
+              "type": "main",
+              "index": 1
+            }
+          ]
+        ]
+      },
+      "Collect Both Branches": {
+        "main": [
+          [
+            {
+              "node": "Summarise",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Summarise": {
+        "main": [
+          [
+            {
+              "node": "Respond With Report",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1"
+    },
+    "staticData": null,
+    "meta": {
+      "instanceId": "local"
+    },
+    "nodeGroups": [],
+    "pinData": {},
+    "versionId": "aa06b990-6102-4b58-95ac-9e9d76caf0ac",
+    "activeVersionId": "aa06b990-6102-4b58-95ac-9e9d76caf0ac",
+    "versionCounter": 2,
+    "triggerCount": 1,
+    "sourceWorkflowId": null,
+    "tags": [],
+    "shared": [
+      {
+        "updatedAt": "2026-08-24T12:01:51.936Z",
+        "createdAt": "2026-08-24T12:01:51.936Z",
+        "role": "workflow:owner",
+        "workflowId": "ConsultBaeDup001",
+        "projectId": "RSd79hz3dZSuoDjv",
+        "project": {
+          "updatedAt": "2026-08-24T12:00:48.631Z",
+          "createdAt": "2026-08-24T12:00:48.631Z",
+          "id": "RSd79hz3dZSuoDjv",
+          "name": "Unnamed Project",
+          "type": "personal",
+          "icon": null,
+          "description": null,
+          "customTelemetryTags": [],
+          "creatorId": "0fc53e65-7acf-4837-bdc5-be6080e2e1c8"
+        }
+      }
+    ],
+    "versionMetadata": {
+      "name": null,
+      "description": null
+    }
+  }
+]
