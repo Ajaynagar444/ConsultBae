@@ -8,7 +8,7 @@ here rather than hard-coding a filename.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -30,16 +30,26 @@ class SourceSpec:
     source_system value stored in the database - deliberately more descriptive
     than the short key, because in a SQL result set `naukri_applicants` explains
     itself and `naukri` does not.
+
+    `columns` is the file's header exactly as written, which the staging layer
+    uses to recognise an embedded header row and to work out a column shift.
+    `fields` maps a semantic role onto whichever column carries it in this
+    file, so the staging code is written once instead of three times.
     """
 
     key: str
     filename: str
     db_enum: str
     description: str
+    columns: tuple[str, ...] = ()
+    fields: "dict[str, str]" = field(default_factory=dict)
 
     @property
     def path(self) -> Path:
         return RAW_DATA_DIR / self.filename
+
+    def column_for(self, role: str) -> str | None:
+        return self.fields.get(role)
 
 
 # The three sources, in the order the assignment lists them.
@@ -49,22 +59,52 @@ SOURCES: tuple[SourceSpec, ...] = (
         filename="source1_naukri_applicants.csv",
         db_enum="naukri_applicants",
         description="Recruitment ATS. Has email AND phone - the only bridge between the other two.",
+        columns=("Full Name", "Email", "Phone", "City", "Experience (Years)",
+                 "Current CTC", "Applied Date", "Skills"),
+        fields={
+            "name": "Full Name",
+            "email": "Email",
+            "phone": "Phone",
+            "city": "City",
+            "experience": "Experience (Years)",
+            "ctc": "Current CTC",
+            "applied_date": "Applied Date",
+            "skills": "Skills",
+        },
     ),
     SourceSpec(
         key="gig_workers",
         filename="source2_gig_workers.csv",
         db_enum="gig_workers",
         description="Gig marketplace. Email only, no phone column.",
+        columns=("email_id", "worker_name", "rate", "location", "status", "skill_tags"),
+        fields={
+            "email": "email_id",
+            "name": "worker_name",
+            "rate": "rate",
+            "city": "location",
+            "status": "status",
+            "skills": "skill_tags",
+        },
     ),
     SourceSpec(
         key="cbnexus",
         filename="source3_cbnexus_contacts.csv",
         db_enum="cbnexus_contacts",
         description="CBNexus CRM. Phone only, no email column.",
+        columns=("Name", "Phone Number", "City", "Verified", "Projects Completed"),
+        fields={
+            "name": "Name",
+            "phone": "Phone Number",
+            "city": "City",
+            "verified": "Verified",
+            "projects": "Projects Completed",
+        },
     ),
 )
 
 SOURCES_BY_KEY: dict[str, SourceSpec] = {s.key: s for s in SOURCES}
+SOURCES_BY_DB_ENUM: dict[str, SourceSpec] = {s.db_enum: s for s in SOURCES}
 
 # Physical data rows per file, measured during profiling (docs/data-profile.md
 # section 2). Asserted after ingestion: if a file changes underneath us, the run

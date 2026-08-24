@@ -79,7 +79,20 @@ def reset(conn: psycopg.Connection) -> None:
     safe here because this database holds nothing but this project.
     """
     print("  dropping schema public ...")
-    conn.execute("DROP SCHEMA IF EXISTS public CASCADE")
+    # DROP SCHEMA needs an exclusive lock and will otherwise wait forever on
+    # any other open connection - a stray psql or a leftover session turns the
+    # test suite into an unexplained hang. Fail in 10s with something readable.
+    conn.execute("SET LOCAL lock_timeout = '10s'")
+    try:
+        conn.execute("DROP SCHEMA IF EXISTS public CASCADE")
+    except psycopg.errors.LockNotAvailable:
+        conn.rollback()
+        sys.exit(
+            "\n  X could not drop schema: another connection is holding it.\n"
+            "    Close other psql/pgAdmin sessions on this database, or run:\n"
+            "      SELECT pg_terminate_backend(pid) FROM pg_stat_activity\n"
+            "       WHERE datname = current_database() AND pid <> pg_backend_pid();"
+        )
     conn.execute("CREATE SCHEMA public")
     # Re-grant what the postgres default template would have given us.
     conn.execute("GRANT ALL ON SCHEMA public TO CURRENT_USER")
